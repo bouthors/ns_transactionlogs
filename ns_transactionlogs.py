@@ -18,8 +18,9 @@ import yaml
 import time
 import os
 import sys
+import calendar
 
-
+# pprint is used for troubleshooting
 pp = pprint.PrettyPrinter(indent=4)
 
 parser = argparse.ArgumentParser(usage='ns_transactionlogs --configfile config.yaml [--debug]', description='Download Netskope Transaction Logs')
@@ -33,7 +34,7 @@ if debug:
     print("arguments:")
     pp.pprint(args)
 
-#Read configuration
+# Read configuration
 configfile = args.configfile
 
 config = yaml.safe_load(open(configfile))
@@ -41,24 +42,29 @@ if debug:
     print("config:")
     pp.pprint(config)
 
-nsurl=config['Netskope_API']['nsurl']
-nstoken=config['Netskope_API']['nstoken']
-location=config['download_location']
+nsurl = config['Netskope_API']['nsurl']
+nstoken = config['Netskope_API']['nstoken']
+location = config['download_location']
+download_mode = config['existing_file']
 
+# check if the path exists
 if not os.path.isdir(location):
     print("Error: path " + str(location) + " not found")
     exit(11)
 
-loglevel=config['Log']['level']
-logfile=config['Log']['file']
+loglevel = config['Log']['level']
+logfile = config['Log']['file']
 
-
-#open logfile
-if (loglevel>0):
+# open logfile if needed
+if (loglevel > 0):
     logoutput = open(logfile, 'a')
 
 
 def get_bucket_list():
+    """
+    First API Request: get list of all buckets
+    """
+
     print("Loading bucket list")
 
     request_buckets = "https://" + nsurl + "/txnlogs/api/v1/bucketlist"
@@ -67,12 +73,15 @@ def get_bucket_list():
         print(request_buckets)
 
     from requests.auth import HTTPBasicAuth
-    resp = requests.get(request_buckets,auth=HTTPBasicAuth(nsurl, nstoken))
+    resp = requests.get(request_buckets, auth=HTTPBasicAuth(nsurl, nstoken))
 
     return resp
 
 
 def get_bucket_objects(name):
+    """
+    Second API Request: get the list of objects (file) in one bucket
+    """
     print("Loading bucket objects")
 
     request_bucket_objects = "https://" + nsurl + "/txnlogs/api/v1/bucket?bucket_name=" + str(name)
@@ -81,9 +90,10 @@ def get_bucket_objects(name):
         print(request_bucket_objects)
 
     from requests.auth import HTTPBasicAuth
-    resp = requests.get(request_bucket_objects,auth=HTTPBasicAuth(nsurl, nstoken))
+    resp = requests.get(request_bucket_objects, auth=HTTPBasicAuth(nsurl, nstoken))
 
     return resp
+
 
 def is_downloadable(url):
     """
@@ -94,14 +104,18 @@ def is_downloadable(url):
     header = h.headers
     content_type = header.get('content-type')
     if debug:
-            pp.pprint(content_type.lower())
+        pp.pprint(content_type.lower())
     if 'text' in content_type.lower():
         return False
     if 'html' in content_type.lower():
         return False
     return True
 
+
 def largenumber_to_text(num, suffix='B', decimal=3):
+    """
+    Format number into readable text
+    """
     if num == 0:
         return "0" + suffix
     for unit in ['', 'K', 'M', 'G', 'T', 'P', 'E', 'Z']:
@@ -110,11 +124,15 @@ def largenumber_to_text(num, suffix='B', decimal=3):
         num /= 1024.0
     return "%.*f%s%s"
 
-def download_object(bucket,object,local_filename):
-    if debug:
-        print("Downloading object "+str(object) + " from "+str(bucket))
 
-    request_object = "https://" + nsurl + "/txnlogs/api/v1/transaction?bucket_name=" +str(bucket)+"&obj_name="+str(object)
+def download_object(bucket, object, local_filename):
+    """
+    Third API Call: download an object
+    """
+    if debug:
+        print("Downloading object " + str(object) + " from " + str(bucket))
+
+    request_object = "https://" + nsurl + "/txnlogs/api/v1/transaction?bucket_name=" + str(bucket) + "&obj_name=" + str(object)
 
     if debug:
         print(request_object)
@@ -124,40 +142,41 @@ def download_object(bucket,object,local_filename):
         return False
 
     from requests.auth import HTTPBasicAuth
-    with requests.get(request_object,auth=HTTPBasicAuth(nsurl, nstoken), stream=True) as r:
+    with requests.get(request_object, auth=HTTPBasicAuth(nsurl, nstoken), stream=True) as r:
         r.raise_for_status()
-        r_size=int(r.headers['Content-Length'])
-        current_size=0
+        r_size = int(r.headers['Content-Length'])
+        current_size = 0
         if debug:
-            print("Object size:"+str(r_size))
+            print("Object size:" + str(r_size))
+
+        if os.path.exists(local_filename):
+            if download_mode == "replace":
+                print("REPLACE mode, " + local_filename + " already exists, replacing")
+            elif download_mode == "retry":
+                if os.stat(local_filename).st_size != r_size:
+                    print("RETRY mode, " + local_filename + " already exists with different size, replacing")
+                else:
+                    print("RETRY mode, " + local_filename + " already exists with same size, skipping")
+                    return False
+
         with open(local_filename, 'wb') as f:
             for chunk in r.iter_content(chunk_size=8192):
                 # If you have chunk encoded response uncomment if
                 # and set chunk_size parameter to None.
                 # if chunk:
                 f.write(chunk)
-                current_size+=len(chunk)
+                current_size += len(chunk)
                 sys.stdout.write('\r')
-                sys.stdout.write(largenumber_to_text(current_size)+"/"+largenumber_to_text(r_size))
+                sys.stdout.write(largenumber_to_text(current_size) + "/" + largenumber_to_text(r_size))
                 sys.stdout.flush()
+
     print(" OK")
     return local_filename
 
 
+# SCRIPT
 
-class APIError(Exception):
-    """An API Error Exception"""
-
-    def __init__(self, status):
-        self.status = status
-
-    def __str__(self):
-        return "APIError: status={}".format(self.status)
-
-
-#SCRIPT
-
-#read the list of buckets (1 bucket per day)
+# read the list of buckets (1 bucket per day)
 error = None
 try:
     response = get_bucket_list()
@@ -180,25 +199,23 @@ if response.status_code != 200:
     pp.pprint(response.json())
     exit(11)
 
-resp=response.json()
+resp = response.json()
 
 if debug:
     print("Buckets retrieved:")
     pp.pprint(resp)
 
-#processing buckets
+# processing buckets
 if resp:
-    buckets=resp["ListAllMyBucketResult"]["Buckets"]["Bucket"]
+    buckets = resp["ListAllMyBucketResult"]["Buckets"]["Bucket"]
 
     print("Got " + str(len(buckets)) + " buckets to process, starting...")
 
-    #process each bucket
+    # process each bucket
     for bucket in buckets:
-        bucketname=bucket['Name']
+        bucketname = bucket['Name']
 
         print("Processing bucket " + str(bucketname))
-
-
 
         # Download list of objects in each bucket
         error = None
@@ -234,14 +251,15 @@ if resp:
             objects = resp_objects["ListBucketResult"]
 
             for object in objects:
-                object_name=object["Contents"]["Name"]
+                object_name = object["Contents"]["Name"]
                 object_lastmodified = object["Contents"]["LastModified"]
+                object_time= time.strptime(object_lastmodified, "%a %b %d %X %Y")
 
-                print("Processing object "+object_name)
-                path=str(location) + "/" + str(bucketname)
-                filename=str(path) + "/" + str(object_name)
+                print("Processing object " + object_name)
+                path = str(location) + "/" + str(bucketname)
+                filename = str(path) + "/" + str(object_name)
 
-#create folder if needed
+                # create folder if needed
                 if not os.path.isdir(path):
                     try:
                         os.mkdir(path)
@@ -251,30 +269,34 @@ if resp:
                     else:
                         print("Successfully created the directory %s " % path)
 
-                download_object(bucketname,object_name,filename)
+                if os.path.exists(filename) and download_mode == "skip":
+                    print("SKIP mode, " + filename + " already exists, skipping")
+                else:
+                    if download_object(bucketname, object_name, filename):
+                        object_epoch=calendar.timegm(object_time)
+                        os.utime(filename,(object_epoch,object_epoch))
 
+                        object_size=os.stat(filename).st_size
 
+                        # generate the log from the alert
+                        curr_time = time.localtime()
 
+                        log = 'time="' + time.strftime('%Y-%m-%d %H:%M:%S %z', curr_time)
+                        log += '",bucket="' + str(bucketname)
+                        log += '",object="' + str(object_name)
+                        log += '",last_time="' + str(object_lastmodified)
+                        log += '",size="' + str(object_size) + '"'
 
+                        # print log on the command line
+                        print(log)
 
-                #generate the log from the alert
-                curr_time = time.localtime()
-
-                log = 'time="' + time.strftime('%Y-%m-%d %H:%M:%S %z',curr_time)
-                log += '",bucket="' +str(bucketname)
-                log += '",object="' + str(object_name)
-                log += '",last_time="' + str(object_lastmodified) + '"'
-
-                #print log on the command line
-                print(log)
-
-                #write log to file
-                if loglevel > 0:
-                    logoutput.write(log)
-                    logoutput.write('\n')
+                        # write log to file
+                        if loglevel > 0:
+                            logoutput.write(log)
+                            logoutput.write('\n')
 
     else:
         "Error reading bucket list"
 
-if (loglevel>0):
+if (loglevel > 0):
     logoutput.close()
