@@ -46,6 +46,8 @@ nsurl = config['Netskope_API']['nsurl']
 nstoken = config['Netskope_API']['nstoken']
 location = config['download_location']
 download_mode = config['existing_file']
+timeperiod = int(config['timeperiod'])
+timeperiod_calc = time.time() - 3600*timeperiod
 
 # check if the path exists
 if not os.path.isdir(location):
@@ -64,8 +66,8 @@ def get_bucket_list():
     """
     First API Request: get list of all buckets
     """
-
-    print("Loading bucket list")
+    if debug:
+        print("Loading bucket list")
 
     request_buckets = "https://" + nsurl + "/txnlogs/api/v1/bucketlist"
 
@@ -82,7 +84,9 @@ def get_bucket_objects(name):
     """
     Second API Request: get the list of objects (file) in one bucket
     """
-    print("Loading bucket objects")
+
+    if debug:
+        print("Loading bucket " + name + " objects")
 
     request_bucket_objects = "https://" + nsurl + "/txnlogs/api/v1/bucket?bucket_name=" + str(name)
 
@@ -111,6 +115,53 @@ def is_downloadable(url):
         return False
     return True
 
+def check_download(url,localfile,mtime):
+    """
+    Check if the file should be downloaded by performing a head request and compare with destination location
+    """
+
+    if debug:
+        print("Check download " + url + ", file:" + localfile)
+
+#perform head request to check the file
+    from requests.auth import HTTPBasicAuth
+    h = requests.head(url, auth=HTTPBasicAuth(nsurl, nstoken))
+    header = h.headers
+    content_type = header.get('content-type')
+    size = int(header.get('Content-Length'))
+
+    if debug:
+        pp.pprint(content_type.lower())
+        print("size:"+str(size))
+    if 'text' in content_type.lower():
+        return False
+    if 'html' in content_type.lower():
+        return False
+
+#check exisiting files
+    if os.path.exists(filename):
+        local_size=os.stat(localfile).st_size
+        local_mtime = os.stat(localfile).st_mtime
+        if download_mode == "skip":
+            print("SKIP mode, " + localfile + " already exists, skipping")
+            return False
+        if download_mode == "replace":
+            print("REPLACE mode, " + localfile + " already exists, replacing")
+            return True
+        if download_mode == "retry":
+            if local_size != size:
+                print("RETRY mode, " + localfile + " already exists with different size, replacing")
+                return True
+            elif local_mtime != mtime:
+                print("RETRY mode, " + localfile + " already exists with different last modified time, replacing")
+                return True
+            else:
+                print("RETRY mode, " + localfile + " already exists with same size and same time, skipping")
+                return False
+
+    else:
+        return True
+
 
 def largenumber_to_text(num, suffix='B', decimal=3):
     """
@@ -125,7 +176,7 @@ def largenumber_to_text(num, suffix='B', decimal=3):
     return "%.*f%s%s"
 
 
-def download_object(bucket, object, local_filename):
+def download_object(bucket, object, local_filename,mtime):
     """
     Third API Call: download an object
     """
@@ -137,8 +188,9 @@ def download_object(bucket, object, local_filename):
     if debug:
         print(request_object)
 
-    if not is_downloadable(request_object):
-        print("Object " + request_object + " is not downloadable")
+    if not check_download(request_object,local_filename,mtime):
+        if debug:
+            print("Object " + request_object + " should not be dowloaded")
         return False
 
     from requests.auth import HTTPBasicAuth
@@ -148,16 +200,6 @@ def download_object(bucket, object, local_filename):
         current_size = 0
         if debug:
             print("Object size:" + str(r_size))
-
-        if os.path.exists(local_filename):
-            if download_mode == "replace":
-                print("REPLACE mode, " + local_filename + " already exists, replacing")
-            elif download_mode == "retry":
-                if os.stat(local_filename).st_size != r_size:
-                    print("RETRY mode, " + local_filename + " already exists with different size, replacing")
-                else:
-                    print("RETRY mode, " + local_filename + " already exists with same size, skipping")
-                    return False
 
         with open(local_filename, 'wb') as f:
             for chunk in r.iter_content(chunk_size=8192):
@@ -170,6 +212,7 @@ def download_object(bucket, object, local_filename):
                 sys.stdout.write(largenumber_to_text(current_size) + "/" + largenumber_to_text(r_size))
                 sys.stdout.flush()
 
+    os.utime(local_filename, (mtime, mtime))
     print(" OK")
     return local_filename
 
@@ -253,28 +296,28 @@ if resp:
             for object in objects:
                 object_name = object["Contents"]["Name"]
                 object_lastmodified = object["Contents"]["LastModified"]
-                object_time= time.strptime(object_lastmodified, "%a %b %d %X %Y")
+                object_lastmodified_date = time.strptime(object_lastmodified, "%a %b %d %X %Y")
+                object_mtime = calendar.timegm(object_lastmodified_date)
 
-                print("Processing object " + object_name)
-                path = str(location) + "/" + str(bucketname)
-                filename = str(path) + "/" + str(object_name)
-
-                # create folder if needed
-                if not os.path.isdir(path):
-                    try:
-                        os.mkdir(path)
-                    except OSError:
-                        print("Creation of the directory %s failed" % path)
-                        exit(11)
-                    else:
-                        print("Successfully created the directory %s " % path)
-
-                if os.path.exists(filename) and download_mode == "skip":
-                    print("SKIP mode, " + filename + " already exists, skipping")
+                if timeperiod>0 and object_mtime < timeperiod_calc:
+                    print("Skipping too old object " + object_name + ",last modified " + object_lastmodified + ",bucket " + bucketname)
                 else:
-                    if download_object(bucketname, object_name, filename):
-                        object_epoch=calendar.timegm(object_time)
-                        os.utime(filename,(object_epoch,object_epoch))
+                    print("Processing object " + object_name)
+                    path = str(location) + "/" + str(bucketname)
+                    filename = str(path) + "/" + str(object_name)
+
+                    # create folder if needed
+                    if not os.path.isdir(path):
+                        try:
+                            os.mkdir(path)
+                        except OSError:
+                            print("Creation of the directory %s failed" % path)
+                            exit(11)
+                        else:
+                            print("Successfully created the directory %s " % path)
+
+
+                    if download_object(bucketname, object_name, filename, object_mtime):
 
                         object_size=os.stat(filename).st_size
 
