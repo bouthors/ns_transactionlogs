@@ -115,54 +115,6 @@ def is_downloadable(url):
         return False
     return True
 
-def check_download(url,localfile,mtime):
-    """
-    Check if the file should be downloaded by performing a head request and compare with destination location
-    """
-
-    if debug:
-        print("Check download " + url + ", file:" + localfile)
-
-#perform head request to check the file
-    from requests.auth import HTTPBasicAuth
-    h = requests.head(url, auth=HTTPBasicAuth(nsurl, nstoken))
-    header = h.headers
-    content_type = header.get('content-type')
-    size = int(header.get('Content-Length'))
-
-    if debug:
-        pp.pprint(content_type.lower())
-        print("size:"+str(size))
-    if 'text' in content_type.lower():
-        return False
-    if 'html' in content_type.lower():
-        return False
-
-#check exisiting files
-    if os.path.exists(filename):
-        local_size=os.stat(localfile).st_size
-        local_mtime = os.stat(localfile).st_mtime
-        if download_mode == "skip":
-            print("SKIP mode, " + localfile + " already exists, skipping")
-            return False
-        if download_mode == "replace":
-            print("REPLACE mode, " + localfile + " already exists, replacing")
-            return True
-        if download_mode == "retry":
-            if local_size != size:
-                print("RETRY mode, " + localfile + " already exists with different size, replacing")
-                return True
-            elif local_mtime != mtime:
-                print("RETRY mode, " + localfile + " already exists with different last modified time, replacing")
-                return True
-            else:
-                print("RETRY mode, " + localfile + " already exists with same size and same time, skipping")
-                return False
-
-    else:
-        return True
-
-
 def largenumber_to_text(num, suffix='B', decimal=3):
     """
     Format number into readable text
@@ -176,32 +128,55 @@ def largenumber_to_text(num, suffix='B', decimal=3):
     return "%.*f%s%s"
 
 
-def download_object(bucket, object, local_filename,mtime):
+def download_object(bucket, object, localfile, mtime):
     """
     Third API Call: download an object
     """
     if debug:
         print("Downloading object " + str(object) + " from " + str(bucket))
 
+    localfile_exists = os.path.exists(localfile)
+
+#check if localfile already exists
+    if localfile_exists:
+        if download_mode == "skip":
+            logtofile(2, bucketname, object_name, object_lastmodified, 0, "skip", "already exists")
+            return False
+        localfile_size=os.stat(localfile).st_size
+        localfile_mtime = os.stat(localfile).st_mtime
+
+
     request_object = "https://" + nsurl + "/txnlogs/api/v1/transaction?bucket_name=" + str(bucket) + "&obj_name=" + str(object)
 
     if debug:
         print(request_object)
 
-    if not check_download(request_object,local_filename,mtime):
-        if debug:
-            print("Object " + request_object + " should not be dowloaded")
-        return False
-
     from requests.auth import HTTPBasicAuth
     with requests.get(request_object, auth=HTTPBasicAuth(nsurl, nstoken), stream=True) as r:
         r.raise_for_status()
         r_size = int(r.headers['Content-Length'])
+
+        logreason=""
+
+        if localfile_exists:
+            if download_mode == "replace":
+                logreason="overwriting existing files"
+            if download_mode == "retry":
+                if localfile_size != r_size:
+                    logreason="different size"
+                elif localfile_mtime != mtime:
+                    logreason = "different time"
+                else:
+                    logtofile(2, bucketname, object_name, object_lastmodified, 0, "skip", "same size and same time")
+                    return False
+        else:
+            logreason="new file"
+
         current_size = 0
         if debug:
             print("Object size:" + str(r_size))
 
-        with open(local_filename, 'wb') as f:
+        with open(localfile, 'wb') as f:
             for chunk in r.iter_content(chunk_size=8192):
                 # If you have chunk encoded response uncomment if
                 # and set chunk_size parameter to None.
@@ -212,12 +187,39 @@ def download_object(bucket, object, local_filename,mtime):
                 sys.stdout.write(largenumber_to_text(current_size) + "/" + largenumber_to_text(r_size))
                 sys.stdout.flush()
 
-    os.utime(local_filename, (mtime, mtime))
+    os.utime(localfile, (mtime, mtime))
     print(" OK")
-    return local_filename
+    logtofile(1, bucketname, object_name, object_lastmodified, 0, "download", logreason)
+    return localfile
+
+def logtofile(level,bucket_name,object_name,object_lastmodified,object_size,action,reason):
+    """
+    Generate the log from the alert
+    """
+
+    curr_time = time.localtime()
+
+    log = 'time="' + time.strftime('%Y-%m-%d %H:%M:%S %z', curr_time)
+    log += '",bucket="' + str(bucket_name)
+    log += '",object="' + str(object_name)
+    log += '",last_modified="' + str(object_lastmodified)
+    log += '",size="' + str(object_size)
+    log += '",action="' + str(action)
+    log += '",reason="' + str(reason)
+    log += '",mode="' + str(download_mode) + '"'
+
+    # print log on the command line
+    print(log)
+
+    # write log to file
+    if level <= loglevel:
+        logoutput.write(log)
+        logoutput.write('\n')
 
 
-# SCRIPT
+"""
+Script start
+"""
 
 # read the list of buckets (1 bucket per day)
 error = None
@@ -300,9 +302,10 @@ if resp:
                 object_mtime = calendar.timegm(object_lastmodified_date)
 
                 if timeperiod>0 and object_mtime < timeperiod_calc:
-                    print("Skipping too old object " + object_name + ",last modified " + object_lastmodified + ",bucket " + bucketname)
+                    logtofile(3,bucketname,object_name,object_lastmodified,0,"skip","too old")
                 else:
-                    print("Processing object " + object_name)
+                    if debug:
+                        print("Processing object " + object_name)
                     path = str(location) + "/" + str(bucketname)
                     filename = str(path) + "/" + str(object_name)
 
@@ -317,26 +320,7 @@ if resp:
                             print("Successfully created the directory %s " % path)
 
 
-                    if download_object(bucketname, object_name, filename, object_mtime):
-
-                        object_size=os.stat(filename).st_size
-
-                        # generate the log from the alert
-                        curr_time = time.localtime()
-
-                        log = 'time="' + time.strftime('%Y-%m-%d %H:%M:%S %z', curr_time)
-                        log += '",bucket="' + str(bucketname)
-                        log += '",object="' + str(object_name)
-                        log += '",last_time="' + str(object_lastmodified)
-                        log += '",size="' + str(object_size) + '"'
-
-                        # print log on the command line
-                        print(log)
-
-                        # write log to file
-                        if loglevel > 0:
-                            logoutput.write(log)
-                            logoutput.write('\n')
+                    download_object(bucketname, object_name, filename, object_mtime)
 
     else:
         "Error reading bucket list"
