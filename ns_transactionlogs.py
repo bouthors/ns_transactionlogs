@@ -62,6 +62,47 @@ if (loglevel > 0):
     logoutput = open(logfile, 'a')
 
 
+def API_request(requesturl,mode="json"):
+    """
+    First API Request: get list of all buckets
+    """
+    if debug:
+        print("API_request : "+requesturl)
+
+    from requests.auth import HTTPBasicAuth
+    nsauth = HTTPBasicAuth(nsurl, nstoken)
+    error = None
+
+    response = requests.get(requesturl, auth=nsauth, stream=(mode=="raw"))
+
+    try:
+        response.raise_for_status()
+    except requests.exceptions.HTTPError as errh:
+        error = "An Http Error occurred:" + repr(errh)
+    except requests.exceptions.ConnectionError as errc:
+        error = "An Error Connecting to the API occurred:" + repr(errc)
+    except requests.exceptions.Timeout as errt:
+        error = "A Timeout Error occurred:" + repr(errt)
+    except requests.exceptions.RequestException as err:
+        error = "An Unknown Error occurred" + repr(err)
+
+    if error:
+        print(error)
+        exit(10)
+
+    if response.status_code != 200:
+        print("Netskope API Error: response code " + str(response.status_code))
+        if mode == "json":
+            pp.pprint(response.json())
+        exit(11)
+
+    if mode == "json":
+        resp = response.json()
+        return resp
+    else:
+        return  response
+
+
 def get_bucket_list():
     """
     First API Request: get list of all buckets
@@ -70,50 +111,19 @@ def get_bucket_list():
         print("Loading bucket list")
 
     request_buckets = "https://" + nsurl + "/txnlogs/api/v1/bucketlist"
-
-    if debug:
-        print(request_buckets)
-
-    from requests.auth import HTTPBasicAuth
-    resp = requests.get(request_buckets, auth=HTTPBasicAuth(nsurl, nstoken))
-
-    return resp
+    return API_request(request_buckets,"json")
 
 
 def get_bucket_objects(name):
     """
     Second API Request: get the list of objects (file) in one bucket
     """
-
     if debug:
         print("Loading bucket " + name + " objects")
 
     request_bucket_objects = "https://" + nsurl + "/txnlogs/api/v1/bucket?bucket_name=" + str(name)
+    return API_request(request_bucket_objects,"json")
 
-    if debug:
-        print(request_bucket_objects)
-
-    from requests.auth import HTTPBasicAuth
-    resp = requests.get(request_bucket_objects, auth=HTTPBasicAuth(nsurl, nstoken))
-
-    return resp
-
-
-def is_downloadable(url):
-    """
-    Does the url contain a downloadable resource
-    """
-    from requests.auth import HTTPBasicAuth
-    h = requests.head(url, auth=HTTPBasicAuth(nsurl, nstoken))
-    header = h.headers
-    content_type = header.get('content-type')
-    if debug:
-        pp.pprint(content_type.lower())
-    if 'text' in content_type.lower():
-        return False
-    if 'html' in content_type.lower():
-        return False
-    return True
 
 def largenumber_to_text(num, suffix='B', decimal=3):
     """
@@ -145,19 +155,16 @@ def download_object(bucket, object, localfile, mtime):
         localfile_size=os.stat(localfile).st_size
         localfile_mtime = os.stat(localfile).st_mtime
 
-
     request_object = "https://" + nsurl + "/txnlogs/api/v1/transaction?bucket_name=" + str(bucket) + "&obj_name=" + str(object)
 
     if debug:
         print(request_object)
 
-    from requests.auth import HTTPBasicAuth
-    with requests.get(request_object, auth=HTTPBasicAuth(nsurl, nstoken), stream=True) as r:
-        r.raise_for_status()
+    with API_request(request_object,"raw") as r:
         r_size = int(r.headers['Content-Length'])
 
         logreason=""
-
+        #check if file should be replaced
         if localfile_exists:
             if download_mode == "replace":
                 logreason="overwriting existing files"
@@ -175,20 +182,18 @@ def download_object(bucket, object, localfile, mtime):
         current_size = 0
         if debug:
             print("Object size:" + str(r_size))
-
+        #download by chunck
         with open(localfile, 'wb') as f:
             for chunk in r.iter_content(chunk_size=8192):
-                # If you have chunk encoded response uncomment if
-                # and set chunk_size parameter to None.
-                # if chunk:
                 f.write(chunk)
                 current_size += len(chunk)
                 sys.stdout.write('\r')
                 sys.stdout.write(largenumber_to_text(current_size) + "/" + largenumber_to_text(r_size))
                 sys.stdout.flush()
 
-    os.utime(localfile, (mtime, mtime))
-    print(" OK")
+        os.utime(localfile, (mtime, mtime))
+        print(" OK")
+
     logtofile(1, bucketname, object_name, object_lastmodified, 0, "download", logreason)
     return localfile
 
@@ -216,35 +221,13 @@ def logtofile(level,bucket_name,object_name,object_lastmodified,object_size,acti
         logoutput.write(log)
         logoutput.write('\n')
 
-
 """
 Script start
 """
 
 # read the list of buckets (1 bucket per day)
-error = None
-try:
-    response = get_bucket_list()
-    response.raise_for_status()
-except requests.exceptions.HTTPError as errh:
-    error = "An Http Error occurred:" + repr(errh)
-except requests.exceptions.ConnectionError as errc:
-    error = "An Error Connecting to the API occurred:" + repr(errc)
-except requests.exceptions.Timeout as errt:
-    error = "A Timeout Error occurred:" + repr(errt)
-except requests.exceptions.RequestException as err:
-    error = "An Unknown Error occurred" + repr(err)
 
-if error:
-    print(error)
-    exit(10)
-
-if response.status_code != 200:
-    print("Netskope API Error: response code " + str(response.status_code))
-    pp.pprint(response.json())
-    exit(11)
-
-resp = response.json()
+resp=get_bucket_list()
 
 if debug:
     print("Buckets retrieved:")
@@ -263,29 +246,7 @@ if resp:
         print("Processing bucket " + str(bucketname))
 
         # Download list of objects in each bucket
-        error = None
-        try:
-            response2 = get_bucket_objects(bucketname)
-            response2.raise_for_status()
-        except requests.exceptions.HTTPError as errh:
-            error = "An Http Error occurred:" + repr(errh)
-        except requests.exceptions.ConnectionError as errc:
-            error = "An Error Connecting to the API occurred:" + repr(errc)
-        except requests.exceptions.Timeout as errt:
-            error = "A Timeout Error occurred:" + repr(errt)
-        except requests.exceptions.RequestException as err:
-            error = "An Unknown Error occurred" + repr(err)
-
-        if error:
-            print(error)
-            exit(10)
-
-        if response2.status_code != 200:
-            print("Netskope API Error: response code " + str(response2.status_code))
-            pp.pprint(response2.json())
-            exit(11)
-
-        resp_objects = response2.json()
+        resp_objects = get_bucket_objects(bucketname)
 
         if debug:
             print("Bucket objects retrieved:")
