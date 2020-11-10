@@ -44,6 +44,10 @@ if debug:
 
 nsurl = config['Netskope_API']['nsurl']
 nstoken = config['Netskope_API']['nstoken']
+nsproxy={}
+nsproxy['http']=config['Netskope_API']['proxy']
+nsproxy['https']=config['Netskope_API']['proxy']
+
 location = config['download_location']
 download_mode = config['existing_file']
 timeperiod = int(config['timeperiod'])
@@ -73,10 +77,11 @@ def API_request(requesturl,mode="json"):
     nsauth = HTTPBasicAuth(nsurl, nstoken)
     error = None
 
-    response = requests.get(requesturl, auth=nsauth, stream=(mode=="raw"))
-
     try:
+        response = requests.get(requesturl, auth=nsauth, stream=(mode == "raw"), proxies=nsproxy)
         response.raise_for_status()
+    except requests.exceptions.ProxyError as err:
+        error = "A Proxy Error occurred:" + repr(err)
     except requests.exceptions.HTTPError as errh:
         error = "An Http Error occurred:" + repr(errh)
     except requests.exceptions.ConnectionError as errc:
@@ -85,6 +90,8 @@ def API_request(requesturl,mode="json"):
         error = "A Timeout Error occurred:" + repr(errt)
     except requests.exceptions.RequestException as err:
         error = "An Unknown Error occurred" + repr(err)
+
+
 
     if error:
         print(error)
@@ -237,7 +244,7 @@ if debug:
 if resp:
     buckets = resp["ListAllMyBucketResult"]["Buckets"]["Bucket"]
 
-    print("Got " + str(len(buckets)) + " buckets to process, starting...")
+    print("Got " + str(len(buckets)) + " buckets to process, using "+download_mode+" mode, starting...")
 
     # process each bucket
     for bucket in buckets:
