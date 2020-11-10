@@ -50,8 +50,23 @@ nsproxy['https']=config['Netskope_API']['proxy']
 
 location = config['download_location']
 download_mode = config['existing_file']
+allowed_modes = ['retry','replace','skip']
+if not download_mode in allowed_modes:
+    print("Invalid download mode, allowed values: retry,replace,skip")
+    exit(10)
+
 timeperiod = int(config['timeperiod'])
 timeperiod_calc = time.time() - 3600*timeperiod
+stats={
+    'buckets':0,
+    'total':0,
+    'excluded':0,
+    'skipped':0,
+    'downloaded':0,
+    'replaced':0,
+    'new':0,
+    'totalbytes':0
+}
 
 # check if the path exists
 if not os.path.isdir(location):
@@ -95,13 +110,13 @@ def API_request(requesturl,mode="json"):
 
     if error:
         print(error)
-        exit(10)
+        exit(20)
 
     if response.status_code != 200:
         print("Netskope API Error: response code " + str(response.status_code))
         if mode == "json":
             pp.pprint(response.json())
-        exit(11)
+        exit(21)
 
     if mode == "json":
         resp = response.json()
@@ -158,6 +173,7 @@ def download_object(bucket, object, localfile, mtime):
     if localfile_exists:
         if download_mode == "skip":
             logtofile(2, bucketname, object_name, object_lastmodified, 0, "skip", "already exists")
+            stats['skipped'] += 1
             return False
         localfile_size=os.stat(localfile).st_size
         localfile_mtime = os.stat(localfile).st_mtime
@@ -182,9 +198,12 @@ def download_object(bucket, object, localfile, mtime):
                     logreason = "different time"
                 else:
                     logtofile(2, bucketname, object_name, object_lastmodified, 0, "skip", "same size and same time")
+                    stats['skipped'] += 1
                     return False
+            stats['replaced'] += 1
         else:
             logreason="new file"
+            stats['new'] += 1
 
         current_size = 0
         if debug:
@@ -200,11 +219,13 @@ def download_object(bucket, object, localfile, mtime):
 
         os.utime(localfile, (mtime, mtime))
         print(" OK")
+        stats['downloaded'] += 1
+        stats['totalbytes'] += r_size
 
-    logtofile(1, bucketname, object_name, object_lastmodified, 0, "download", logreason)
+    logtofile(1, bucketname, object_name, object_lastmodified, 0, "download", logreason, r_size)
     return localfile
 
-def logtofile(level,bucket_name,object_name,object_lastmodified,object_size,action,reason):
+def logtofile(level,bucket_name,object_name,object_lastmodified,object_size,action,reason,size=''):
     """
     Generate the log from the alert
     """
@@ -218,7 +239,8 @@ def logtofile(level,bucket_name,object_name,object_lastmodified,object_size,acti
     log += '",size="' + str(object_size)
     log += '",action="' + str(action)
     log += '",reason="' + str(reason)
-    log += '",mode="' + str(download_mode) + '"'
+    log += '",mode="' + str(download_mode)
+    log += '",size="' + str(size) + '"'
 
     # print log on the command line
     print(log)
@@ -249,6 +271,7 @@ if resp:
     # process each bucket
     for bucket in buckets:
         bucketname = bucket['Name']
+        stats['buckets']+=1
 
         print("Processing bucket " + str(bucketname))
 
@@ -264,6 +287,7 @@ if resp:
             objects = resp_objects["ListBucketResult"]
 
             for object in objects:
+                stats['total'] += 1
                 object_name = object["Contents"]["Name"]
                 object_lastmodified = object["Contents"]["LastModified"]
                 object_lastmodified_date = time.strptime(object_lastmodified, "%a %b %d %X %Y")
@@ -271,6 +295,7 @@ if resp:
 
                 if timeperiod>0 and object_mtime < timeperiod_calc:
                     logtofile(3,bucketname,object_name,object_lastmodified,0,"skip","too old")
+                    stats['excluded'] += 1
                 else:
                     if debug:
                         print("Processing object " + object_name)
@@ -283,7 +308,7 @@ if resp:
                             os.mkdir(path)
                         except OSError:
                             print("Creation of the directory %s failed" % path)
-                            exit(11)
+                            exit(15)
                         else:
                             print("Successfully created the directory %s " % path)
 
@@ -295,3 +320,14 @@ if resp:
 
 if (loglevel > 0):
     logoutput.close()
+
+if debug:
+    pp.pprint(stats)
+
+print("Stats: " + str(stats['buckets']) + " buckets found with a total of " + str(stats['total']) + " objects processed with "+download_mode+ " mode")
+print(" - " + str(stats['excluded']) + " excluded with timeperiod")
+print(" - " + str(stats['skipped']) + " skipped")
+print(" - " + str(stats['downloaded']) + " downloaded")
+print("   - " + str(stats['replaced']) + " replaced")
+print("   - " + str(stats['new']) + " new")
+print(" Total bytes downloaded: " + largenumber_to_text(stats['totalbytes']))
