@@ -1,15 +1,15 @@
-#ns_transaction.py
+# ns_transaction.py
 This python script is designed to easily download and archive Netskope transaction logs.
 
-##Requirements
+## Requirements
 Tested with python3.7 and the following librairies:
 - requests
 - pyyaml
 
-##Installation
+## Installation
 Download the script and copy the sample configuration file.
 
-##Configuration
+## Configuration
 Edit the yaml config file.
 
 Settings:
@@ -35,7 +35,7 @@ existing_file: "retry"
     - 3 : all files + all objects excluded by timeperiod setting
   - file: destination file for logs
 
-##Usage
+## Usage
 
 ns_transactionlogs.py --configfile config.yaml [--debug]
 
