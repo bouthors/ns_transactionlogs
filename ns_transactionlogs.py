@@ -23,8 +23,8 @@ import calendar
 # pprint is used for troubleshooting
 pp = pprint.PrettyPrinter(indent=4)
 
-parser = argparse.ArgumentParser(usage='ns_transactionlogs --configfile config.yaml [--debug]', description='Download Netskope Transaction Logs')
-parser.add_argument('--configfile', required=True)
+parser = argparse.ArgumentParser(usage='ns_transactionlogs [--configfile config.yaml] [--debug]', description='This python script is designed to easily download and archive Netskope transaction logs. Repository: https://github.com/bouthors/ns_transactionlogs')
+parser.add_argument('--configfile', required=False, help='yaml configuration file')
 parser.add_argument('--debug', action='store_true', help='enable debug')
 
 args = parser.parse_args()
@@ -36,6 +36,15 @@ if debug:
 
 # Read configuration
 configfile = args.configfile
+
+#default config file
+if not configfile:
+    print("Using default config file config.yaml")
+    configfile = "config.yaml"
+
+if not os.path.isfile(configfile):
+    print("File " + configfile + " not found")
+    exit(9)
 
 config = yaml.safe_load(open(configfile))
 if debug:
