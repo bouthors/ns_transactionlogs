@@ -5,6 +5,8 @@ Netskope_API:
   nstoken: "1234"
 #leave proxy empty if not needed, format is http://user:password@192.168.1.1:3128/
   proxy:
+  verifyssl: True
+#verifyssl can be True, False or root CA file (for example "rootcacert.pem") used to check destination url. provided root CA is useful if you apply SSL inspection with Netskope Proxy.
 
 #Local folder
 download_location: "ns_transactionlogs"
@@ -18,7 +20,7 @@ existing_file: "retry"
 # number of previous hours to retrieve  (0 to retrieve all)
 timeperiod: 0
 
-#loglevel, level=0 to disable, 1=new files only, 2=all files, 3=all files+all objects excluded by timeperiod
+#loglevel, level=0 to disable, 1=downloaded files only, 2=all files, 3=all files+all objects excluded by timeperiod
 Log:
   level: 1
   file: ns_transactionlogs.log
