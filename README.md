@@ -37,7 +37,9 @@ existing_file: "retry"
 
 ## Usage
 
-ns_transactionlogs.py --configfile config.yaml [--debug]
+ns_transactionlogs.py [--configfile config.yaml] [--debug]
+
+The file "config.yaml" will be used if not specified.
 
 ## Example
 
