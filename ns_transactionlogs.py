@@ -47,6 +47,7 @@ nstoken = config['Netskope_API']['nstoken']
 nsproxy={}
 nsproxy['http']=config['Netskope_API']['proxy']
 nsproxy['https']=config['Netskope_API']['proxy']
+verifyssl=config['Netskope_API']['verifyssl']
 
 location = config['download_location']
 download_mode = config['existing_file']
@@ -93,7 +94,7 @@ def API_request(requesturl,mode="json"):
     error = None
 
     try:
-        response = requests.get(requesturl, auth=nsauth, stream=(mode == "raw"), proxies=nsproxy)
+        response = requests.get(requesturl, auth=nsauth, stream=(mode == "raw"), proxies=nsproxy, verify=verifyssl)
         response.raise_for_status()
     except requests.exceptions.ProxyError as err:
         error = "A Proxy Error occurred:" + repr(err)
