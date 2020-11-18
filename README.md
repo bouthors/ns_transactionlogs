@@ -6,6 +6,10 @@ Tested with python3.7 and the following librairies:
 - requests
 - pyyaml
 
+This can be installed with the provided requirements file:
+
+    pip install -r requirements.txt
+
 ## Installation
 Download the script and copy the sample configuration file.
 
